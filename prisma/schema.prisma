@@ -1,0 +1,294 @@
+// VaquejaData — Schema Prisma
+// PostgreSQL 16 · Prisma 5.x
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  OWNER     // Proprietário de cavalo
+  RIDER     // Vaqueiro
+  FAN       // Torcedor / seguidor
+}
+
+enum HorseSex {
+  MACHO
+  FEMEA
+  CASTRADO
+}
+
+enum CompetitionStatus {
+  UPCOMING
+  ONGOING
+  FINISHED
+  CANCELLED
+}
+
+enum CategoryType {
+  PROFISSIONAL
+  AMADOR
+  ASPIRANTE
+  DERBY
+  MIRIM
+  FEMININO
+  OUTROS
+}
+
+enum HorseRole {
+  PUXADOR
+  ESTEIREIRO
+}
+
+enum MediaType {
+  PHOTO
+  VIDEO_LINK
+}
+
+enum AbqmTitleType {
+  REGISTRO_MERITO
+  CAMPEAO_NACIONAL
+  CAMPEAO_ESTADUAL
+  CAMPEAO_REGIONAL
+  POTRO_FUTURO
+  GRANDE_CAMPEA0
+  RESERVADO_CAMPEA0
+  OUTRO
+}
+
+// ─────────────────────────────────────────────
+// USERS
+// ─────────────────────────────────────────────
+
+model User {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String   @db.VarChar(120)
+  email      String   @unique @db.VarChar(255)
+  phone      String?  @db.VarChar(20)
+  document   String?  @db.VarChar(14) // CPF
+  avatarUrl  String?  @db.Text
+  bio        String?  @db.Text
+  role       UserRole @default(FAN)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  bredHorses        Horse[]                  @relation("HorseBreeder")
+  ownedHorses       Horse[]                  @relation("HorseCurrentOwner")
+  ownershipHistory  HorseOwnershipHistory[]
+  riderResults      HorseCompetitionResult[] @relation("ResultRider")
+  verifiedTitles    AbqmTitle[]              @relation("TitleVerifier")
+  resultRegistered  HorseCompetitionResult[] @relation("ResultRegisteredBy")
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// HORSES
+// ─────────────────────────────────────────────
+
+model Horse {
+  id               String    @id @default(uuid()) @db.Uuid
+  name             String    @db.VarChar(120)
+  abqmRegistration String?   @unique @map("abqm_registration") @db.VarChar(20)
+  birthDate        DateTime? @map("birth_date") @db.Date
+  sex              HorseSex?
+  coatColor        String?   @map("coat_color") @db.VarChar(60) // Pelagem
+  bio              String?   @db.Text
+  profilePhotoUrl  String?   @map("profile_photo_url") @db.Text
+  coverPhotoUrl    String?   @map("cover_photo_url") @db.Text
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  // Ownership
+  breederId      String? @map("breeder_id") @db.Uuid
+  breeder        User?   @relation("HorseBreeder", fields: [breederId], references: [id])
+  currentOwnerId String? @map("current_owner_id") @db.Uuid
+  currentOwner   User?   @relation("HorseCurrentOwner", fields: [currentOwnerId], references: [id])
+
+  // Genealogy — self-referencing
+  // Avós são obtidos via: horse.sire.sire / horse.sire.dam / horse.dam.sire / horse.dam.dam
+  sireId String? @map("sire_id") @db.Uuid
+  sire   Horse?  @relation("HorseSire", fields: [sireId], references: [id])
+  damId  String? @map("dam_id") @db.Uuid
+  dam    Horse?  @relation("HorseDam", fields: [damId], references: [id])
+
+  // Back-relations for genealogy
+  sireOf Horse[] @relation("HorseSire")
+  damOf  Horse[] @relation("HorseDam")
+
+  // Back-relations for results & history
+  competitionResults    HorseCompetitionResult[] @relation("HorseResults")
+  partnerInResults      HorseCompetitionResult[] @relation("HorsePartner")
+  ownershipHistory      HorseOwnershipHistory[]
+  abqmTitles            AbqmTitle[]
+
+  @@map("horses")
+}
+
+// ─────────────────────────────────────────────
+// OWNERSHIP HISTORY
+// ─────────────────────────────────────────────
+
+model HorseOwnershipHistory {
+  id             String    @id @default(uuid()) @db.Uuid
+  horseId        String    @map("horse_id") @db.Uuid
+  horse          Horse     @relation(fields: [horseId], references: [id])
+  ownerId        String    @map("owner_id") @db.Uuid
+  owner          User      @relation(fields: [ownerId], references: [id])
+  acquiredAt     DateTime  @map("acquired_at") @db.Date
+  transferredAt  DateTime? @map("transferred_at") @db.Date // NULL = proprietário atual
+  transferValue  Decimal?  @map("transfer_value") @db.Decimal(12, 2)
+  notes          String?   @db.Text
+
+  @@map("horse_ownership_history")
+}
+
+// ─────────────────────────────────────────────
+// CHAMPIONSHIPS → STAGES → COMPETITIONS → CATEGORIES
+// ─────────────────────────────────────────────
+
+model Championship {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String   @db.VarChar(150)
+  organization String?  @db.VarChar(100) // Ex: AVACE, ABQM
+  year         Int
+  description  String?  @db.Text
+  logoUrl      String?  @map("logo_url") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  stages ChampionshipStage[]
+
+  @@map("championships")
+}
+
+model ChampionshipStage {
+  id               String   @id @default(uuid()) @db.Uuid
+  championshipId   String   @map("championship_id") @db.Uuid
+  championship     Championship @relation(fields: [championshipId], references: [id])
+  stageNumber      Int      @map("stage_number")
+  name             String   @db.VarChar(100) // Ex: "1ª Etapa"
+  startDate        DateTime @map("start_date") @db.Date
+  endDate          DateTime @map("end_date") @db.Date
+  city             String?  @db.VarChar(80)
+  state            String?  @db.Char(2) // UF
+
+  competitions Competition[]
+
+  @@map("championship_stages")
+}
+
+model Competition {
+  id             String            @id @default(uuid()) @db.Uuid
+  stageId        String            @map("stage_id") @db.Uuid
+  stage          ChampionshipStage @relation(fields: [stageId], references: [id])
+  name           String            @db.VarChar(150) // Ex: "Vaquejada do Parque X"
+  date           DateTime          @db.Date
+  location       String?           @db.VarChar(200)
+  totalPrizePool Decimal?          @map("total_prize_pool") @db.Decimal(12, 2)
+  status         CompetitionStatus @default(UPCOMING)
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  categories CompetitionCategory[]
+
+  @@map("competitions")
+}
+
+model CompetitionCategory {
+  id            String       @id @default(uuid()) @db.Uuid
+  competitionId String       @map("competition_id") @db.Uuid
+  competition   Competition  @relation(fields: [competitionId], references: [id])
+  name          String       @db.VarChar(100) // Ex: "Profissional Puxador"
+  categoryType  CategoryType @map("category_type") @default(PROFISSIONAL)
+  role          HorseRole    @default(PUXADOR)
+  prizePool     Decimal?     @map("prize_pool") @db.Decimal(12, 2)
+  pointsFormula String?      @map("points_formula") @db.Text
+
+  results HorseCompetitionResult[]
+
+  @@map("competition_categories")
+}
+
+// ─────────────────────────────────────────────
+// RESULTS (core linking table)
+// ─────────────────────────────────────────────
+
+model HorseCompetitionResult {
+  id               String              @id @default(uuid()) @db.Uuid
+  horseId          String              @map("horse_id") @db.Uuid
+  horse            Horse               @relation("HorseResults", fields: [horseId], references: [id])
+  categoryId       String              @map("category_id") @db.Uuid
+  category         CompetitionCategory @relation(fields: [categoryId], references: [id])
+
+  // Vaqueiro que montou o cavalo nessa prova
+  riderId          String?             @map("rider_id") @db.Uuid
+  rider            User?               @relation("ResultRider", fields: [riderId], references: [id])
+
+  // Cavalo parceiro (puxador <-> esteireiro)
+  partnerHorseId   String?             @map("partner_horse_id") @db.Uuid
+  partnerHorse     Horse?              @relation("HorsePartner", fields: [partnerHorseId], references: [id])
+
+  placement        String?             @db.VarChar(40)  // "1º Lugar", "Rachou", etc.
+  placementNumeric Int?                @map("placement_numeric")  // para ordenação
+  prizeMoney       Decimal             @default(0) @map("prize_money") @db.Decimal(12, 2)
+  pointsEarned     Decimal             @default(0) @map("points_earned") @db.Decimal(10, 2)
+  notes            String?             @db.Text
+  registeredAt     DateTime            @default(now()) @map("registered_at")
+
+  registeredById   String?             @map("registered_by_id") @db.Uuid
+  registeredBy     User?               @relation("ResultRegisteredBy", fields: [registeredById], references: [id])
+
+  media ResultMedia[]
+
+  @@unique([horseId, categoryId]) // um cavalo por prova por competição
+  @@map("horse_competition_results")
+}
+
+// ─────────────────────────────────────────────
+// MEDIA
+// ─────────────────────────────────────────────
+
+model ResultMedia {
+  id           String                 @id @default(uuid()) @db.Uuid
+  resultId     String                 @map("result_id") @db.Uuid
+  result       HorseCompetitionResult @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  mediaType    MediaType              @map("media_type")
+  url          String                 @db.Text
+  thumbnailUrl String?                @map("thumbnail_url") @db.Text
+  caption      String?                @db.Text
+  uploadedAt   DateTime               @default(now()) @map("uploaded_at")
+
+  @@map("result_media")
+}
+
+// ─────────────────────────────────────────────
+// ABQM OFFICIAL TITLES
+// ─────────────────────────────────────────────
+
+model AbqmTitle {
+  id             String        @id @default(uuid()) @db.Uuid
+  horseId        String        @map("horse_id") @db.Uuid
+  horse          Horse         @relation(fields: [horseId], references: [id])
+  titleName      String        @map("title_name") @db.VarChar(150)
+  titleType      AbqmTitleType @map("title_type") @default(OUTRO)
+  year           Int
+  event          String?       @db.VarChar(150)
+  description    String?       @db.Text
+  certificateUrl String?       @map("certificate_url") @db.Text
+  verified       Boolean       @default(false)
+  verifiedAt     DateTime?     @map("verified_at")
+  verifiedById   String?       @map("verified_by_id") @db.Uuid
+  verifiedBy     User?         @relation("TitleVerifier", fields: [verifiedById], references: [id])
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  @@map("abqm_titles")
+}
